@@ -1,40 +1,45 @@
 //
-// Created by vastrakai on 1/6/2024.
+// Created by vastrakai on 6/30/2024.
 //
 
-#include "AutoScale.h"
+#include "AutoScale.hpp"
 
-void AutoScale::OnTick()
+#include <Features/FeatureManager.hpp>
+#include <SDK/Minecraft/ClientInstance.hpp>
+#include <SDK/Minecraft/Rendering/GuiData.hpp>
+
+void AutoScale::onEnable()
 {
-    float scale = GuiScale.Value;
+    // Store the old values
+    auto guiData = ClientInstance::get()->getGuiData();
+    mOldGuiScale = guiData->mGuiScale;
+    mOldScaleMultiplier = guiData->mScalingMultiplier;
+    mOldScaledResolution = guiData->mResolutionScaled;
 
-    auto guiData = Minecraft::ClientInstance->guiData;
-    guiData->guiScale = scale;
-    guiData->scalingMultiplier = 1 / scale;
-    guiData->resolutionScaled = Vector2(guiData->resolution.x * guiData->scalingMultiplier, guiData->resolution.y * guiData->scalingMultiplier);
+    // Set the new values
+    guiData->mGuiScale = mScaleSetting.mValue;
+    guiData->mScalingMultiplier = 1 / mScaleSetting.mValue;
+    guiData->mResolutionScaled = glm::vec2(guiData->mResolution.x * guiData->mScalingMultiplier, guiData->mResolution.y * guiData->mScalingMultiplier);
+
+    gFeatureManager->mDispatcher->listen<RenderEvent, &AutoScale::onRenderEvent>(this);
 }
 
-Vector2 AutoScale::OldScaledResolution = Vector2(0, 0);
-float AutoScale::OldScaleMultiplier = 0;
-float AutoScale::OldGuiScale = 0;
-
-void AutoScale::OnEnable()
+void AutoScale::onDisable()
 {
-    float scale = GuiScale.Value;
+    gFeatureManager->mDispatcher->deafen<RenderEvent, &AutoScale::onRenderEvent>(this);
 
-    auto guiData = Minecraft::ClientInstance->guiData;
-    OldGuiScale = guiData->guiScale;
-    OldScaleMultiplier = guiData->scalingMultiplier;
-    OldScaledResolution = guiData->resolutionScaled;
-    guiData->guiScale = scale;
-    guiData->scalingMultiplier = 1 / scale;
-    guiData->resolutionScaled = Vector2(guiData->resolution.x * guiData->scalingMultiplier, guiData->resolution.y * guiData->scalingMultiplier);
+    // Restore the old values
+    auto guiData = ClientInstance::get()->getGuiData();
+    guiData->mGuiScale = mOldGuiScale;
+    guiData->mScalingMultiplier = mOldScaleMultiplier;
+    guiData->mResolutionScaled = mOldScaledResolution;
 }
 
-void AutoScale::OnDisable()
+void AutoScale::onRenderEvent(RenderEvent& event)
 {
-    auto guiData = Minecraft::ClientInstance->guiData;
-    guiData->guiScale = OldGuiScale;
-    guiData->scalingMultiplier = OldScaleMultiplier;
-    guiData->resolutionScaled = OldScaledResolution;
+    float scale = mScaleSetting.mValue;
+    auto guiData = ClientInstance::get()->getGuiData();
+    guiData->mGuiScale = scale;
+    guiData->mScalingMultiplier = 1 / scale;
+    guiData->mResolutionScaled = glm::vec2(guiData->mResolution.x * guiData->mScalingMultiplier, guiData->mResolution.y * guiData->mScalingMultiplier);
 }

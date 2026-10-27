@@ -1,78 +1,67 @@
 //
-// Created by vastrakai on 12/27/2023.
+// Created by alteik on 15/10/2024.
 //
 
-#include "Zoom.h"
-
-#include <Prax/SDK/Game/Internal/MinecraftGame.h>
-#include <Prax/Utils/Math.h>
-
-float Zoom::OldFOV = 0;
-bool Zoom::Rendering = false;
-float Zoom::TargetFOV = 0;
-
-void Zoom::OnEnable()
+#include "Zoom.hpp"
+#include <SDK/Minecraft/Actor/Actor.hpp>
+#include <SDK/Minecraft/ClientInstance.hpp>
+#include <SDK/Minecraft/Rendering/LevelRenderer.hpp>
+#include <SDK/Minecraft/Options.hpp>
+/*ihate useless methot*/
+void Zoom::onEnable()
 {
-    TargetFOV = ZoomAmount.Value;
-    Minecraft::ClientInstance->GetOptions()->gfx_field_of_view->minimum = 0;
-    if (!Rendering) OldFOV = Minecraft::ClientInstance->GetOptions()->gfx_field_of_view->value;
-    Rendering = true;
+    
+    mCurrentValue = ClientInstance::get()->getOptions()->mGfxFieldOfView->mValue;
+    /*ClientInstance::get()->getOptions()->mGfxFieldOfView->mMinValue = 10.f;
+    */
+    gFeatureManager->mDispatcher->listen<MouseEvent, &Zoom::onMouseEvent>(this);
+    gFeatureManager->mDispatcher->listen<LevelRenderEvent, &Zoom::onLevelRenderEvent>(this);
 }
 
-void Zoom::OnDisable()
+void Zoom::onDisable()
 {
-    if (!Smooth.Enabled) Minecraft::ClientInstance->GetOptions()->gfx_field_of_view->value = OldFOV;
+    
+    gFeatureManager->mDispatcher->deafen<MouseEvent, &Zoom::onMouseEvent>(this);
+    gFeatureManager->mDispatcher->deafen<LevelRenderEvent, &Zoom::onLevelRenderEvent>(this);
+    /*
+    ClientInstance::get()->getOptions()->mGfxFieldOfView->mValue = mPastFov;
+    ClientInstance::get()->getOptions()->mGfxFieldOfView->mMinValue = 30.f;*/
 }
 
-void Zoom::OnTick()
-{
-}
+void Zoom::onMouseEvent(MouseEvent& event)
+{ /* to do fi x  this shit */
+    if (ClientInstance::get()->getMouseGrabbed()) return;
+    if (!mScroll.mValue) return;
 
-void Zoom::OnRender()
-{
-    float deltaTime = ImGui::GetIO().DeltaTime;
-    float fov = Minecraft::ClientInstance->GetOptions()->gfx_field_of_view->value;
-    if (!Smooth.Enabled && Enabled) {
-        Minecraft::ClientInstance->GetOptions()->gfx_field_of_view->value = ZoomAmount.Value;
-        Rendering = true;
-    }
-    else if (Smooth.Enabled && Enabled) {
-        Minecraft::ClientInstance->GetOptions()->gfx_field_of_view->value = Math::Animate(fov, TargetFOV, deltaTime * SmoothSpeed.Value);
-        Rendering = true;
-    } else if (!Enabled && Rendering) {
-        Minecraft::ClientInstance->GetOptions()->gfx_field_of_view->value = Math::Animate(fov, OldFOV, deltaTime * SmoothSpeed.Value);
-        if (fov == OldFOV) Rendering = false;
-
-    }
-
-}
-
-void Zoom::OnEject()
-{
-    // set all values back to normal
-    if (!Enabled) return;
-    Minecraft::ClientInstance->GetOptions()->gfx_field_of_view->minimum = 30;
-    Minecraft::ClientInstance->GetOptions()->gfx_field_of_view->value = OldFOV;
-    Rendering = false;
-}
-
-void Zoom::OnMouseInput(void* Instance, int mouseButton, int isDown, short mouseX, short mouseY, long long a1,
-    long long a2, long long a3, bool* cancel)
-{
-    if (!ScrollZoom.Enabled) return;
-    if (!Minecraft::ClientInstance->mcGame->canUseKeys()) return;
-
-    float incAmount = ScrollZoomAmount.Value;
-    if (mouseButton == 4) {
-        if (isDown == 0x78 || isDown == 0x7F) {
-            *cancel = true;
-            if (TargetFOV - incAmount <= Minecraft::ClientInstance->GetOptions()->gfx_field_of_view->minimum) return;
-            TargetFOV -= incAmount;
+    if (event.mActionButtonId == 4)
+    {
+        if (event.mButtonData == 0x78 || event.mButtonData == 0x7F)
+        {
+            mZoomValue.mValue -= mScrollIncrement.mValue;
+            event.cancel();
         }
-        else if (isDown == 0x88 || isDown == 0x80) {
-            *cancel = true;
-            if (TargetFOV + incAmount >= OldFOV) return;
-            TargetFOV += incAmount;
+        else if (event.mButtonData == 0x88 || event.mButtonData == 0x80 || event.mButtonData == -0x78)
+        {
+            mZoomValue.mValue += mScrollIncrement.mValue;
+            event.cancel();
         }
     }
+    mZoomValue.mValue = std::clamp(mZoomValue.mValue, 10.f, 120.f);
+}
+
+void Zoom::onLevelRenderEvent(LevelRenderEvent& event)
+{
+    auto player = ClientInstance::get()->getLocalPlayer();
+    if (!player) return;
+    auto lr = ClientInstance::get()->getLevelRenderer()->getRendererPlayer();
+    if (!lr) return;
+    if (!mSmooth.mValue) {
+        mCurrentValue = mZoomValue.mValue;
+    }
+    else {
+        mCurrentValue = MathUtils::lerp(mCurrentValue, mZoomValue.mValue, ImGui::GetIO().DeltaTime * 10.f);
+    }
+    lr->setFovX(*lr->getFovX() * (120.f / std::max(mCurrentValue, 10.f)));
+    lr->setFovY(*lr->getFovY() * (120.f / std::max(mCurrentValue, 10.f)));
+
 }

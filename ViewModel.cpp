@@ -1,16 +1,28 @@
 //
-// Created by vastrakai on 4/19/2024.
+// Created by vastrakai on 9/14/2024.
 //
 
-#include "ViewModel.h"
+#include "ViewModel.hpp"
 
-#include <ext/matrix_transform.hpp>
+#include <Features/Events/BobHurtEvent.hpp>
 
-void ViewModel::OnRenderMatrix(glm::mat4 *matrix) {
-    if (Translate.Enabled) *matrix = glm::translate(*matrix, glm::vec3(TranslateX.Value / 100, TranslateY.Value / 100, TranslateZ.Value / 100));
-    if (Rotate.Enabled) {
-        *matrix = glm::rotate(*matrix, glm::radians(RotateX.Value), glm::vec3(1, 0, 0));
-        *matrix = glm::rotate(*matrix, glm::radians(RotateY.Value), glm::vec3(0, 1, 0));
-        *matrix = glm::rotate(*matrix, glm::radians(RotateZ.Value), glm::vec3(0, 0, 1));
-    }
+void ViewModel::onEnable()
+{
+    gFeatureManager->mDispatcher->listen<BobHurtEvent, &ViewModel::onBobHurtEvent, nes::event_priority::FIRST>(this);
+}
+
+void ViewModel::onDisable()
+{
+    gFeatureManager->mDispatcher->deafen<BobHurtEvent, &ViewModel::onBobHurtEvent>(this);
+}
+
+void ViewModel::onBobHurtEvent(BobHurtEvent& event)
+{
+    float x = mX.mValue;
+    float y = mY.mValue;
+    float z = mZ.mValue;
+
+    glm::mat4 matrix = *event.mMatrix;
+    matrix = glm::translate(matrix, glm::vec3(x, y, z));
+    *event.mMatrix = matrix;
 }

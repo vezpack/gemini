@@ -1,209 +1,157 @@
 //
-// Created by vastrakai on 4/17/2024.
+// Created by vastrakai on 8/7/2024.
 //
 
-#include <Prax/SDK/Game/Entity/Components/ActorTypeComponent.h>
-#include <Prax/SDK/Game/Entity/Components/ActorOwnerComponent.h>
-#include <Prax/Utils/Math.h>
-#include <Prax/Utils/Render/Font.h>
-#include <Prax/Utils/Render/Render.h>
-#include <Prax/Module/Modules/Player/InventoryManager.h>
-#include <Prax/Module/ModuleManager.h>
-#include "ItemESP.h"
+#include "ItemESP.hpp"
 
-int ItemESP::BestHelmetValue = 0;
-int ItemESP::BestChestplateValue = 0;
-int ItemESP::BestLeggingsValue = 0;
-int ItemESP::BestBootsValue = 0;
-int ItemESP::BestSwordValue = 0;
-int ItemESP::BestPickaxeValue = 0;
-int ItemESP::BestAxeValue = 0;
-int ItemESP::BestShovelValue = 0;
+#include <Features/Events/BaseTickEvent.hpp>
+#include <SDK/Minecraft/ClientInstance.hpp>
+#include <SDK/Minecraft/Actor/ItemActor.hpp>
+#include <SDK/Minecraft/Inventory/Item.hpp>
+#include <SDK/Minecraft/Rendering/GuiData.hpp>
+#include <Features/Events/BaseTickEvent.hpp>
+#include <Features/Modules/Player/InvManager.hpp>
 
-bool ItemESP::ShouldHighlightItem(ItemStack* stack) {
-    if (!HighlightBetterItems.Enabled) return false;
-    if (!stack || !stack->item) return false;
-    Item* item = *stack->item;
-
-    auto player = Minecraft::ClientInstance->ThePlayer();
-    if (!player) return false;
-    auto supplies = player->supplies;
-
-    if (item->IsArmor()) {
-        int value = item->getArmorValue();
-        if (stack->compoundTag) value += stack->getEnchantValue(Enchant::PROTECTION);
-
-        if (item->IsHelmet()) return value > BestHelmetValue;
-        if (item->IsChestplate()) return value > BestChestplateValue;
-        if (item->IsLeggings()) return value > BestLeggingsValue;
-        if (item->IsBoots()) return value > BestBootsValue;
-
-    } else if (item->IsTool()) {
-        int value = supplies->GetToolItemValue(stack);
-        if (item->IsSword() && stack->compoundTag) value += stack->getEnchantValue(Enchant::SHARPNESS);
-        else if (stack->compoundTag) value += stack->getEnchantValue(Enchant::EFFICIENCY);
-
-        if (item->IsSword()) return value > BestSwordValue;
-        if (item->IsPickaxe()) return value > BestPickaxeValue;
-        if (item->IsAxe()) return value > BestAxeValue;
-        if (item->IsShovel()) return value > BestShovelValue;
-    }
-
-    return false;
+void ItemESP::onEnable()
+{
+    gFeatureManager->mDispatcher->listen<RenderEvent, &ItemESP::onRenderEvent>(this);
+    gFeatureManager->mDispatcher->listen<BaseTickEvent, &ItemESP::onBaseTickEvent>(this);
 }
 
-void ItemESP::OnTick(){
-    auto player = Minecraft::ClientInstance->ThePlayer();
-    if (!player) return;
-
-    if (!HighlightBetterItems.Enabled) return;
-
-    auto supplies = player->supplies;
-
-    int helmetValue = -1;
-    int chestplateValue = -1;
-    int leggingsValue = -1;
-    int bootsValue = -1;
-
-    ItemStack* helmet = player->getArmor(ArmorSlot::Helmet);
-    ItemStack* chestplate = player->getArmor(ArmorSlot::Chestplate);
-    ItemStack* leggings = player->getArmor(ArmorSlot::Leggings);
-    ItemStack* boots = player->getArmor(ArmorSlot::Boots);
-
-    if (helmet->item) helmetValue = (*helmet->item)->getArmorValue() + helmet->getEnchantValue(Enchant::PROTECTION);
-    if (chestplate->item) chestplateValue = (*chestplate->item)->getArmorValue() + chestplate->getEnchantValue(Enchant::PROTECTION);
-    if (leggings->item) leggingsValue = (*leggings->item)->getArmorValue() + leggings->getEnchantValue(Enchant::PROTECTION);
-    if (boots->item) bootsValue = (*boots->item)->getArmorValue() + boots->getEnchantValue(Enchant::PROTECTION);
-
-    BestHelmetValue = helmetValue;
-    BestChestplateValue = chestplateValue;
-    BestLeggingsValue = leggingsValue;
-    BestBootsValue = bootsValue;
-
-    int swordValue = -1;
-    int pickaxeValue = -1;
-    int axeValue = -1;
-    int shovelValue = -1;
-
-    for (int i = 0; i < 36; i++) {
-        ItemStack* stack = supplies->inventory->getItem(i);
-        if (!stack->item) continue;
-
-        Item* item = *stack->item;
-        if (item->IsSword()) {
-            int value = supplies->GetToolItemValue(stack) + stack->getEnchantValue(Enchant::SHARPNESS);
-            if (value > swordValue) swordValue = value;
-        } else if (item->IsPickaxe()) {
-            int value = supplies->GetToolItemValue(stack) + stack->getEnchantValue(Enchant::EFFICIENCY);
-            if (value > pickaxeValue) pickaxeValue = value;
-        } else if (item->IsAxe()) {
-            int value = supplies->GetToolItemValue(stack) + stack->getEnchantValue(Enchant::EFFICIENCY);
-            if (value > axeValue) axeValue = value;
-        } else if (item->IsShovel()) {
-            int value = supplies->GetToolItemValue(stack) + stack->getEnchantValue(Enchant::EFFICIENCY);
-            if (value > shovelValue) shovelValue = value;
-        }
-    }
-
-    BestSwordValue = swordValue;
-    BestPickaxeValue = pickaxeValue;
-    BestAxeValue = axeValue;
-    BestShovelValue = shovelValue;
-
-
-
-
+void ItemESP::onDisable()
+{
+    gFeatureManager->mDispatcher->deafen<RenderEvent, &ItemESP::onRenderEvent>(this);
+    gFeatureManager->mDispatcher->deafen<BaseTickEvent, &ItemESP::onBaseTickEvent>(this);
 }
 
-void ItemESP::DoRender(Actor* actor) {
-    auto player = Minecraft::ClientInstance->ThePlayer();
-    ItemActor* itemActor = (ItemActor*)actor;
-    if (!itemActor) return;
-    ItemStack* stack = &itemActor->mItem;
-    if (!stack || !stack->item) return;
-    Item* item = *stack->item;
+struct ItemInfo
+{
+    glm::vec3* pos;
+    glm::vec2 size;
+    std::string name;
+    bool isUseful;
+    std::vector<std::pair<std::string, int>> enchants;
+};
 
+std::vector<ItemInfo> items;
+std::mutex itemMutex;
 
+void ItemESP::onBaseTickEvent(BaseTickEvent& event)
+{
+    auto player = event.mActor;
+    std::lock_guard<std::mutex> lock(itemMutex);
 
+    items.clear();
+    auto actors = ActorUtils::getActorsTyped<ItemActor>(ActorType::ItemEntity);
 
-    Vector3 pos = *actor->GetRenderPositionComponent() - Vector3(0.f, 1.62f, 0.f);
-    if (!actor->isPlayer())
+    for (auto actor : actors)
     {
-        pos = *actor->GetRenderPositionComponent();
+        if (!actor) continue;
+        if (!actor->mItem.getItem()) continue;
+        if (!actor->getStateVectorComponent()) continue;
+        if (mDistanceLimited.mValue && player->distanceTo(actor) > mDistance.mValue) continue;
+
+        auto renderPosComp = actor->getRenderPositionComponent();
+        if (!renderPosComp) continue;
+        auto shape = actor->getAABBShapeComponent();
+        if (!shape) continue;
+
+        glm::vec3 pos = renderPosComp->mPosition;
+        glm::vec3 origin = RenderUtils::transform.mOrigin;
+        float aabbHeight = shape->mHeight;
+        float aabbWidth = shape->mWidth;
+
+        ItemStack* stack = &actor->mItem;
+        if (!stack || !stack->getItem()) continue;
+
+        bool isUseful = !InvManager::isItemUseless(stack, -1);
+        std::string name = actor->mItem.getItem()->mName;
+        if (name.empty()) return;
+        name += " x" + std::to_string(stack->mCount);
+
+        std::vector<std::pair<std::string, int>> enchants;
+        for (int i = 0; i <= static_cast<int>(Enchant::SWIFT_SNEAK); ++i)
+        {
+            int enchantValue = stack->getEnchantValue(i);
+            if (enchantValue > 0)
+            {
+                enchants.emplace_back(stack->getEnchantName(static_cast<Enchant>(i)), enchantValue);
+            }
+        }
+
+        items.push_back({&renderPosComp->mPosition, {aabbWidth, aabbHeight}, name, isUseful, enchants});
     }
-
-    if (DistanceLimited.Enabled && player->getPos()->Distance(pos) > Distance.Value) return;
-
-    float hitboxWidth = actor->GetAABBShapeComponent()->hitboxWidth;
-    float hitboxHeight = actor->GetAABBShapeComponent()->hitboxHeight;
-    // since the pos is in the center of the hitbox
-    Vector3 aabbMin = Vector3(pos.x - hitboxWidth / 2, pos.y, pos.z - hitboxWidth / 2);
-    Vector3 aabbMax = Vector3(pos.x + hitboxWidth / 2, pos.y + hitboxHeight, pos.z + hitboxWidth / 2);
-
-    // Slightly increase the size of the AABB so it matches the actual hitbox
-    aabbMin = aabbMin - Vector3(0.1f, 0.1f, 0.1f);
-    aabbMax = aabbMax + Vector3(0.1f, 0.1f, 0.1f);
-
-
-    AABB aabb = AABB(aabbMin, aabbMax, true);
-
-    ImColor color = ImColor(255, 255, 255, 255);
-
-    if (ShouldHighlightItem(stack)) {
-        Math::DrawOutlinedBox(aabb.lower, aabb.upper, 1.0f, ImColor(0, 255, 0, 255));
-        color = ImColor(0, 255, 0, 255);
-    }
-    else {
-        Math::DrawOutlinedBox(aabb.lower, aabb.upper, 1.0f, ImColor(255, 255, 255, 255));
-    }
-
-
-    std::vector<Vector2> points = Math::GetHexForAABB(aabb);
-    float yVal = FLT_MAX;
-    float xVal = FLT_MAX;
-    for (auto&& point : points) {
-        if (point.y < yVal) yVal = point.y;
-        if (point.x < xVal) xVal = point.x;
-    }
-
-    if (points.empty()) return;
-
-
-
-    // Draw the name as well with ImGui (get pos based on above points)
-    ImVec2 pos2d = ImVec2(xVal, yVal);
-
-    std::string name = item->GetName();
-    if (name.empty()) return;
-    name += " x" + std::to_string(stack->amount);
-
-    if (stack->compoundTag && color.Value.x != 0) {
-        // purple for enchanted items
-        color = ImColor(255, 0, 255, 255);
-    }
-
-    int font_size = FontSize.Value;
-
-    //  Render
-    ImGui::PushFont(Font::Fonts["greycliff_demibold_large"]);
-    ImVec2 textSize = ImGui::GetFont()->CalcTextSizeA(font_size, FLT_MAX, 0, name.c_str());
-    ImVec2 textPos = ImVec2(pos2d.x - textSize.x / 2, pos2d.y - textSize.y / 2);
-    Render::RenderTextColored(name, textPos, font_size, color, false);
-
-    ImGui::PopFont();
 }
 
-void ItemESP::OnRender() {
-    auto player = Minecraft::ClientInstance->ThePlayer();
+void ItemESP::onRenderEvent(RenderEvent& event)
+{
+    std::lock_guard<std::mutex> lock(itemMutex);
+    if (!ClientInstance::get()->getLevelRenderer()) return;
+
+    auto ci = ClientInstance::get();
+    auto player = ci->getLocalPlayer();
     if (!player) return;
+    if (!ci->getLevelRenderer()) return;
 
-    for (auto&& [_, moduleOwner, type] : player->entityCtx.registry->view<ActorOwnerComponent, ActorTypeComponent>().each()) {
-        auto actor = moduleOwner.actor;
-        if (player == actor) continue;
+    auto drawList = ImGui::GetBackgroundDrawList();
 
-        if (type.type == ActorType::ItemEntity) {
-            if (DistanceLimited.Enabled && player->getPos()->Distance(*actor->GetRenderPositionComponent()) > Distance.Value) continue;
-            DoRender(actor); // this will crash sometimes, fix it yourself :)
+    for (auto actor : items)
+    {
+        AABB aabb;
+
+        glm::vec3 ppos = *actor.pos;
+        ppos = ppos - glm::vec3(actor.size.x / 2, 0, actor.size.x / 2);
+        aabb.mMin = ppos;
+        aabb.mMax = ppos + glm::vec3(actor.size.x, actor.size.y, actor.size.x);
+
+
+        std::vector<ImVec2> imPoints = MathUtils::getImBoxPoints(aabb);
+
+        ImColor themeColor = mThemedColor.mValue ? ColorUtils::getThemedColor(0) : ImColor(1.0f, 1.0f, 1.0f);
+
+        if (mRenderFilled.mValue) drawList->AddConvexPolyFilled(imPoints.data(), imPoints.size(), ImColor(themeColor.Value.x, themeColor.Value.y, themeColor.Value.z, 0.25f));
+        drawList->AddPolyline(imPoints.data(), imPoints.size(), themeColor, 0, 2.0f);
+
+        glm::vec3 pos = *actor.pos;
+        glm::vec3 origin = RenderUtils::transform.mOrigin;
+        glm::vec2 screen = glm::vec2(0, 0);
+
+        if (!RenderUtils::transform.mMatrix.OWorldToScreen(origin, pos, screen, ci->getFov(), ci->getGuiData()->mResolution)) continue;
+
+        if (!mShowNames.mValue) continue;
+        std::string name = actor.name;
+
+        if (mShowEnchant.mValue && !actor.enchants.empty()) {
+            std::string enchantText;
+            for (const auto& enchant : actor.enchants) {
+                if (!enchantText.empty()) {
+                    enchantText += ", ";
+                }
+                enchantText += "[" + enchant.first + "]";
+            }
+            name += " " + enchantText;
         }
+
+        FontHelper::pushPrefFont(true, true);
+
+        float fontSize = mFontSize.mValue;
+
+        if (mDistanceScaledFont.mValue)
+        {
+            // use distance to origin, not actor
+            float distance = glm::distance(origin, pos) + 2.5f;
+            if (distance < 0) distance = 0;
+            fontSize = 1.0f / distance * 100.0f * mScalingMultiplier.mValue;
+            if (fontSize < 1.0f) fontSize = 1.0f;
+        }
+
+        ImVec2 textSize = ImGui::GetFont()->CalcTextSizeA(fontSize, FLT_MAX, 0, name.c_str());
+        ImVec2 textPos = ImVec2(screen.x - textSize.x / 2, screen.y - textSize.y - 5);
+        //drawList->AddText(ImGui::GetFont(), fontSize, textPos, ImColor(1.0f, 1.0f, 1.0f, 1.0f), name.c_str());
+        ImColor textCol = actor.isUseful && mHighlightUsefulItems.mValue ? ImColor(0.0f, 1.0f, 0.0f) : ImColor(1.0f, 1.0f, 1.0f); // Green for useful and white for others
+
+        ImRenderUtils::drawShadowText(drawList, name, textPos, textCol, fontSize, true);
+
+        FontHelper::popPrefFont();
     }
 }

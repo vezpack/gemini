@@ -1,101 +1,87 @@
 //
-// Created by Flash on 12/26/2023.
+// Created by alteik on 11/10/2024.
 //
 
-#include "ChinaHat.h"
+#include "ChinaHat.hpp"
+#include <SDK/Minecraft/Actor/Actor.hpp>
+#include <SDK/Minecraft/ClientInstance.hpp>
+#include <SDK/Minecraft/Rendering/GuiData.hpp>
+#include <SDK/Minecraft/Options.hpp>
+#include <SDK/Minecraft/Rendering/GuiData.hpp>
 
-#include <Prax/Utils/Math.h>
-#include <Prax/Utils/Render/Render.h>
+float ChinaHat::toRadians(float deg) {
+    return deg * (PI / 180.0f);
+}
 
-#include "HUD.h"
+void ChinaHat::onEnable() {
+    gFeatureManager->mDispatcher->listen<RenderEvent, &ChinaHat::onRenderEvent>(this);
+}
 
-void ChinaHat::OnRender()
-{
-    int pointCount = (int) Resolution.Value;
-    float radius = Size.Value;
+void ChinaHat::onDisable() {
+    gFeatureManager->mDispatcher->deafen<RenderEvent, &ChinaHat::onRenderEvent>(this);
+}
 
-    auto corrected = Render::Transform.modelView;
-    auto player = Minecraft::ClientInstance->ThePlayer();
+void ChinaHat::onRenderEvent(RenderEvent& event) {
+    if (ClientInstance::get()->getOptions()->mThirdPerson->mValue == 0) return;
 
-    if (player == nullptr) return;
-    if (player->level == nullptr) return;
+    int pointCount = 20;
+    float radius = mSize.mValue;
 
-    for (auto actor: player->level->getRuntimeActorList())
-    {
-        if (actor == nullptr) continue;
+    auto corrected = RenderUtils::transform.mMatrix;
+    auto player = ClientInstance::get()->getLocalPlayer();
 
-        if (!actor->isPlayer() && !RenderOnMobs.Enabled) continue;
-        if (actor != player && !RenderOnOthers.Enabled) continue;
-        if (actor == player && RenderOnSelf.Enabled && Minecraft::ClientInstance->GetOptions()->game_thirdperson->value == 0) continue;
-        Vector3 pos = actor->GetLerpedPos();
+    if (!player || !player->getLevel()) return;
 
-        if (player == actor)
-        {
-            pos = Render::Transform.playerPos;
-        }
+    glm::vec3 pos = RenderUtils::transform.mPlayerPos;
+    pos.y -= 1.62;
 
-        if (actor->isPlayer() && actor != player) {
-            pos.y -= 1.62f;
-        }
+    auto color = ColorUtils::getThemedColor(0);
+    color.Value.w = mOpacity.mValue;
+    float height = player->getAABBShapeComponent()->mHeight;
+    glm::vec2 screenPos1 = { 0, 0 };
+    glm::vec3 hatTip = { pos.x, pos.y + height + (0.5f * mSize.mValue), pos.z };
 
-        auto color = RGB.Enabled
-                     ? HUD::GetColor(ticks)
-                     : ImColor(1.f, 1.f, 1.f, Opacity.Value);
-        color.Value.w = Opacity.Value;
-        float height = actor->GetAABBShapeComponent()->hitboxHeight;
-        Vector2 screenPos1 = {0, 0};
-        Vector3 hatTip = {pos.x, pos.y + height + (float)(0.5f * Size.Value), pos.z};
+    if (!corrected.OWorldToScreen(RenderUtils::transform.mOrigin, hatTip, screenPos1, MathUtils::fov,
+        ClientInstance::get()->getGuiData()->mResolution))
+        return;
 
+    glm::vec2 screenPos2 = { 0, 0 };
+    glm::vec2 screenPos3 = { 0, 0 };
+    for (int i = 0; i <= pointCount; i++) {
+        float angle = (i / (float)pointCount) * 360.f;
+        float rad = toRadians(angle);
 
-        if (!corrected.OWorldToScreen(Render::Transform.origin,
-                                       hatTip, screenPos1, Math::Fov,
-                                       Minecraft::ClientInstance->guiData->resolution))
+        float x = pos.x + radius * cosf(rad);
+        float y = pos.y + height;
+        float z = pos.z + radius * sinf(rad);
+
+        glm::vec3 thisPos = { x, y, z };
+
+        if (!corrected.OWorldToScreen(RenderUtils::transform.mOrigin, thisPos, screenPos3, MathUtils::fov,
+            ClientInstance::get()->getGuiData()->mResolution))
             continue;
 
+        if (i > 0 && (screenPos2.x != 0 && screenPos2.y != 0)) {
+            ImGui::GetBackgroundDrawList()->Flags &= ~ImDrawListFlags_AntiAliasedFill;
 
-        Vector2 screenPos2 = {0, 0};
-        Vector2 screenPos3 = {0, 0};
-        for (int i = 0; i <= pointCount; i++) {
-            float angle = (i / (float) pointCount) * 360.f;
-            float rad = Math::ToRadians(angle);
+            ImGui::GetBackgroundDrawList()->AddTriangleFilled(
+                ImVec2(screenPos1.x, screenPos1.y),
+                ImVec2(screenPos2.x, screenPos2.y),
+                ImVec2(screenPos3.x, screenPos3.y),
+                color);
+            ImVec2 points[3] = { screenPos1,
+                                screenPos2,
+                                screenPos3 };
 
-            float x = pos.x + radius * cosf(rad);
-            float y = pos.y + height;
-            float z = pos.z + radius * sinf(rad);
+            ImGui::GetBackgroundDrawList()->AddShadowConvexPoly(points, 3, color, mGlowAmount.mValue,
+                ImVec2(1.0f, 1.0f), 0.0f);
 
-            Vector3 thisPos = {x, y, z};
+            ImGui::GetBackgroundDrawList()->Flags |= ImDrawListFlags_AntiAliasedFill;
 
-            if (!corrected.OWorldToScreen(
-                    Render::Transform.origin,
-                    thisPos, screenPos3, Math::Fov,
-                    Minecraft::ClientInstance->guiData->resolution))
-                continue;
-
-            if (i > 0 && (screenPos2.x != 0 && screenPos2.y != 0)) {
-                ImGui::GetBackgroundDrawList()->Flags &= ~ImDrawListFlags_AntiAliasedFill;
-
-                ImGui::GetBackgroundDrawList()->AddTriangleFilled(
-                        ImVec2(screenPos1.x, screenPos1.y),
-                        ImVec2(screenPos2.x, screenPos2.y),
-                        ImVec2(screenPos3.x, screenPos3.y),
-                        color);
-                ImVec2 points[3] = {screenPos1,
-                                    screenPos2,
-                                    screenPos3};
-
-
-
-                ImGui::GetBackgroundDrawList()->AddShadowConvexPoly(points, 3, color, GlowAmount.Value,
-                                                                    ImVec2(1.0f, 1.0f), 0.0f);
-
-                ImGui::GetBackgroundDrawList()->Flags |= ImDrawListFlags_AntiAliasedFill;
-
-            }
-
-
-            corrected.OWorldToScreen(Render::Transform.origin,
-                                      thisPos, screenPos2, Math::Fov,
-                                      Minecraft::ClientInstance->guiData->resolution);
         }
+
+        corrected.OWorldToScreen(RenderUtils::transform.mOrigin,
+            thisPos, screenPos2, MathUtils::fov,
+            ClientInstance::get()->getGuiData()->mResolution);
     }
 }

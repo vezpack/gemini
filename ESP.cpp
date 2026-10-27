@@ -1,67 +1,100 @@
 //
-// Created by vastrakai on 8/20/2023.
+// Created by vastrakai on 7/7/2024.
 //
 
-#include "ESP.h"
-#include <src/Prax/SDK/Game/Minecraft.h>
-#include <Prax/Utils/Math.h>
-#include <Prax/Utils/Render/ColorUtil.h>
-#include <Prax/Module/Modules/Combat/Antibot.h>
-#include <Prax/Module/Modules/Player/Friends.h>
-#include <Prax/Module/Modules/Player/Teams.h>
-#include <Prax/SDK/Game/Entity/Components/ActorTypeComponent.h>
-#include <Prax/Utils/Render/Image.h>
+#include "ESP.hpp"
 
-#include "HUD.h"
-#include "Prax/SDK/Game/Entity/Components/ActorOwnerComponent.h"
+#include <Features/FeatureManager.hpp>
+#include <Features/Events/ActorRenderEvent.hpp>
+#include <Features/Modules/Misc/Friends.hpp>
+#include <SDK/Minecraft/ClientInstance.hpp>
+#include <SDK/Minecraft/Options.hpp>
+#include <SDK/Minecraft/Actor/Actor.hpp>
 
-void ESP::OnRender()
+void ESP::onEnable()
 {
-    auto player = Minecraft::ClientInstance->ThePlayer();
-    if (!player) return;
+    gFeatureManager->mDispatcher->listen<RenderEvent, &ESP::onRenderEvent>(this);
+}
 
-    for (auto&& [_, moduleOwner, type, ridc] : player->entityCtx.registry->view<ActorOwnerComponent, ActorTypeComponent, RuntimeIDComponent>().each())
+void ESP::onDisable()
+{
+    gFeatureManager->mDispatcher->deafen<RenderEvent, &ESP::onRenderEvent>(this);
+}
+
+void ESP::onRenderEvent(RenderEvent& event)
+{
+    if (!ClientInstance::get()->getLevelRenderer()) return;
+
+    auto actors = ActorUtils::getActorList(false, true);
+    auto localPlayer = ClientInstance::get()->getLocalPlayer();
+
+    if (mDebug.mValue)
     {
-        Actor* actor = moduleOwner.actor;
-        if (actor == player && !RenderOnSelf.Enabled) continue;
-
-        auto color = ImColor(255, 255, 255, 255);
-
-        if (HighlightBots.Enabled && Antibot::IsBot(actor)) color = ImColor(255, 0, 0, 255);
-        else if (Antibot::IsBot(actor)) continue;
-        if (Teams::IsOnTeam(actor)) continue;
-
-        AABB aabb = actor->GetLerpedAABB();
+        auto botActors = ActorUtils::getActorList(false, false);
+        // Remove actors that are not bots from the botActors list
+        std::erase_if(botActors, [actors](Actor* actor) {
+            return std::ranges::find(actors, actor) != actors.end();
+            });
 
 
-        if (RGBMode.SelectedIndex == static_cast<int>(RGBMode::Themed) && (!Antibot::IsBot(actor) || !HighlightBots.Enabled)) {
-            color = HUD::GetColor(0);
+
+        // Draw a red outline around the bot actors
+        auto drawList = ImGui::GetBackgroundDrawList();
+        for (auto actor : botActors)
+        {
+            if (actor == localPlayer && ClientInstance::get()->getOptions()->mThirdPerson->mValue == 0) continue;
+            if (actor == localPlayer && !mRenderLocal.mValue) continue;
+            auto shape = actor->getAABBShapeComponent();
+            if (!shape) continue;
+
+            auto themeColor = ImColor(1.0f, 0.0f, 0.0f);
+
+            if (actor->isPlayer())
+            {
+                if (gFriendManager->isFriend(actor))
+                {
+                    if (mShowFriends.mValue) themeColor = ImColor(0.0f, 1.0f, 0.0f);
+                    else continue;
+                }
+            }
+
+            AABB aabb = actor->getAABB();
+
+            std::vector<ImVec2> imPoints = MathUtils::getImBoxPoints(aabb);
+
+            if (mRenderFilled.mValue) drawList->AddConvexPolyFilled(imPoints.data(), imPoints.size(), ImColor(themeColor.Value.x, themeColor.Value.y, themeColor.Value.z, 0.25f));
+            drawList->AddPolyline(imPoints.data(), imPoints.size(), themeColor, 0, 2.0f);
         }
 
-        if (ShowFriends.Enabled && Friends::IsFriend(actor)) color = ImColor(0, 255, 0, 255);
-        else if (!ShowFriends.Enabled && Friends::IsFriend(actor)) continue;
+    }
 
-        ImVec4 pos = Math::Get2dDrawPoints(aabb.lower, aabb.upper);
 
-        if (pos.x == 0 && pos.y == 0 && pos.z == 0 && pos.w == 0)
-            continue;
+    auto drawList = ImGui::GetBackgroundDrawList();
 
-        switch (Mode.SelectedIndex) {
-        case 0: // Image
-            ImGui::GetBackgroundDrawList()->AddImage(
-                    (void *)Image::Images["esp.jpg"],
-                    ImVec2(pos.x, pos.y), ImVec2(pos.z, pos.w));
-            break;
-        case 1: // 2D
-            ImGui::GetBackgroundDrawList()->AddRect(ImVec2(pos.x, pos.y), ImVec2(pos.z, pos.w), ImColor(0,0,0), 0.0f, 0, 2.0f);
-            ImGui::GetBackgroundDrawList()->AddRect(ImVec2(pos.x, pos.y), ImVec2(pos.z, pos.w), color, 0.0f, 0, 1.0f);
-            break;
-        case 2: // 3D
-            Math::DrawBox(aabb.lower,aabb.upper, 1.0f, color);
-            break;
-        case 3: // Outline (Draws lines to each of the outer vertices)
-            Math::DrawOutlinedBox(aabb.lower, aabb.upper, 1.0f, color);
-            break;
+
+    for (auto actor : actors)
+    {
+        if (actor == localPlayer && ClientInstance::get()->getOptions()->mThirdPerson->mValue == 0) continue;
+        if (actor == localPlayer && !mRenderLocal.mValue) continue;
+        auto shape = actor->getAABBShapeComponent();
+        if (!shape) continue;
+
+        auto themeColor = ColorUtils::getThemedColor(0);
+
+        if (actor->isPlayer())
+        {
+            if (gFriendManager->isFriend(actor))
+            {
+                if (mShowFriends.mValue) themeColor = ImColor(0.0f, 1.0f, 0.0f);
+                else continue;
+            }
         }
+
+        AABB aabb = actor->getAABB();
+
+        std::vector<ImVec2> imPoints = MathUtils::getImBoxPoints(aabb);
+
+        if (mRenderFilled.mValue) drawList->AddConvexPolyFilled(imPoints.data(), imPoints.size(), ImColor(themeColor.Value.x, themeColor.Value.y, themeColor.Value.z, 0.25f));
+        drawList->AddPolyline(imPoints.data(), imPoints.size(), themeColor, 0, 2.0f);
     }
 }

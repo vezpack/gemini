@@ -1,60 +1,93 @@
-//
-// Created by vastrakai on 9/28/2023.
-//
+#include "PlaceHighlights.hpp"
 
-#include <Prax/Utils/Render/Render.h>
-#include "PlaceHighlights.h"
+#include <Features/FeatureManager.hpp>
+#include <Features/Events/PacketOutEvent.hpp>
+#include <SDK/Minecraft/ClientInstance.hpp>
+#include <SDK/Minecraft/Actor/Actor.hpp>
+#include <SDK/Minecraft/Actor/GameMode.hpp>
+#include <SDK/Minecraft/Inventory/PlayerInventory.hpp>
+#include <SDK/Minecraft/World/Level.hpp>
+#include <SDK/Minecraft/World/HitResult.hpp>
+#include <SDK/Minecraft/Network/Packets/InventoryTransactionPacket.hpp>
 
-std::map<uint64_t, Vector3> PlaceHighlights::LastPlaceMap = std::map<uint64_t, Vector3>();
-
-void PlaceHighlights::OnTick() {
-
+void PlaceHighlights::onEnable()
+{
+    gFeatureManager->mDispatcher->listen<RenderEvent, &PlaceHighlights::onRenderEvent>(this);
+    gFeatureManager->mDispatcher->listen<PacketOutEvent, &PlaceHighlights::onPacketOutEvent>(this);
 }
 
-void PlaceHighlights::OnDisable() {
-
+void PlaceHighlights::onDisable()
+{
+    gFeatureManager->mDispatcher->deafen<RenderEvent, &PlaceHighlights::onRenderEvent>(this);
+    gFeatureManager->mDispatcher->deafen<PacketOutEvent, &PlaceHighlights::onPacketOutEvent>(this);
 }
 
-void PlaceHighlights::OnEnable() {
+void PlaceHighlights::onRenderEvent(RenderEvent& event)
+{
+    auto player = ClientInstance::get()->getLocalPlayer();
+    if (!player || ClientInstance::get()->getMouseGrabbed() || mPlaceMap.empty()) return;
 
-}
+    auto drawList = ImGui::GetBackgroundDrawList();
+    ImColor themedColor = ColorUtils::getThemedColor(0);
 
-void PlaceHighlights::OnRender() {
-    if (LastPlaceMap.empty()) return;
+    std::vector<glm::ivec3> removeQueued;
 
-    if (!Minecraft::ClientInstance->levelRenderer) return;
+    for (auto& it : mPlaceMap)
+    {
+        glm::ivec3 blockPos = it.first;
+        uint64_t PlacedTime = it.second;
+        float alpha = mMaxOpacity.mValue - ((float)(NOW - PlacedTime) / mDuration.mValue);
+        int alphaInt = (int)(alpha * 200);
 
-    try {
-        std::vector<uint64_t> toRemove = std::vector<uint64_t>();
-        for (auto &it: LastPlaceMap) {
-            Vector3 blockPos = it.second;
-            float alpha = 1.f - ((float) (Misc::GetCurrentMs() - it.first) / (SecondsToRender.Value * 1000));
-            int alphai = (int) (alpha * 200);
-
-            int totalBlocks =
-                    Minecraft::ClientInstance->ThePlayer()->supplies->GetAllPlaceableBlocks(false);
-            // Decide color based on the amount of blocks
-
-            ImColor color;
-
-            if (totalBlocks < 32) color = ImColor(249, 98, 94, alphai);
-            else if (totalBlocks < 64) color = ImColor(255, 229, 61, alphai);
-            else color = ImColor(61, 245, 1, alphai);
-
-            ImColor filledColor = ImColor(color.Value.x, color.Value.y, color.Value.z, color.Value.w / 2);
-            if (alpha <= 0) toRemove.push_back(it.first);
-            else {
-                if (DrawMethod.SelectedIndex == 0) Render::DrawBoxAroundBlockOutline(blockPos, color);
-                else Render::DrawBoxAroundBlock(blockPos, color, filledColor);
-            }
-
-            for (auto &it: toRemove) {
-                LastPlaceMap.erase(it);
-            }
-
-            toRemove.clear();
+        if (alphaInt < 0) {
+            removeQueued.emplace_back(PlacedTime);
+            continue;
         }
-    } catch (std::exception &e) {
-        Logger::Write("PlaceHighlights", "Failed to render: " + std::string(e.what()), Logger::LogType::Error);
+
+        auto boxSize = glm::vec3(1, 1, 1);
+        auto boxAABB = AABB(blockPos, boxSize);
+        ImColor cColor = themedColor;
+        if (mColorMode.mValue == ColorMode::Custom) cColor = mBoxColor.getAsImColor();
+        cColor.Value.w = alpha;
+
+        std::vector<ImVec2> imPoints = MathUtils::getImBoxPoints(boxAABB);
+
+        if (mFilled.mValue) drawList->AddConvexPolyFilled(imPoints.data(), imPoints.size(), cColor);
+        drawList->AddPolyline(imPoints.data(), imPoints.size(), cColor, 0, 2.0f);
+    }
+
+    if (!removeQueued.empty())
+    {
+        for (auto& it : removeQueued)
+        {
+            mPlaceMap.erase(it);
+        }
+    }
+}
+
+void PlaceHighlights::onPacketOutEvent(PacketOutEvent& event)
+{
+    auto player = ClientInstance::get()->getLocalPlayer();
+    if (!player) return;
+
+    if (event.mPacket->getId() == PacketID::InventoryTransaction)
+    {
+        if (const auto it = event.getPacket<InventoryTransactionPacket>(); it->mTransaction->type ==
+            ComplexInventoryTransaction::Type::ItemUseTransaction)
+        {
+            const auto transac = reinterpret_cast<ItemUseInventoryTransaction*>(it->mTransaction.get());
+            if (transac->mActionType == ItemUseInventoryTransaction::ActionType::Place)
+            {
+                ItemStack* holdingItem = player->getSupplies()->getContainer()->getItem(transac->mSlot);
+                if (holdingItem->getItem() && holdingItem->mBlock)
+                {
+                    int face = transac->mFace;
+                    if (face < 0 || 5 < face) {
+                        return;
+                    }
+                    mPlaceMap[transac->mBlockPos + mOffsetList[transac->mFace]] = NOW;
+                }
+            }
+        }
     }
 }

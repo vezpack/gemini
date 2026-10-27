@@ -1,23 +1,41 @@
 //
-// Created by vastrakai on 12/27/2023.
+// Created by vastrakai on 9/13/2024.
 //
 
-#include "FullBright.h"
+#include "FullBright.hpp"
 
-#include <Prax/Utils/Math.h>
+#include <SDK/Minecraft/ClientInstance.hpp>
+#include <SDK/Minecraft/Options.hpp>
 
-
-float FullBright::OldGamma = 0;
-
-void FullBright::OnEnable()
+void FullBright::onEnable()
 {
-    Minecraft::ClientInstance->GetOptions()->gfx_gamma->maximum = 100;
-    OldGamma = Minecraft::ClientInstance->GetOptions()->gfx_gamma->value;
-    Minecraft::ClientInstance->GetOptions()->gfx_gamma->value = 100;
+    auto ci = ClientInstance::get();
+    auto options = ci->getOptions();
+    auto gamma = options->mGfxGamma;
 }
 
-void FullBright::OnDisable()
+void FullBright::onDisable()
 {
-    Minecraft::ClientInstance->GetOptions()->gfx_gamma->value = OldGamma;
-    Minecraft::ClientInstance->GetOptions()->gfx_gamma->maximum = 1.f;
+    auto ci = ClientInstance::get();
+    auto options = ci->getOptions();
+    auto gamma = options->mGfxGamma;
+}
+
+
+void FullBright::onRenderEvent(RenderEvent& event)
+{
+    static float speed = 10.f;
+    float targetGamma = mEnabled ? 13.f : 1.f;
+
+    // (if the current gamma is within 0.001 of the target gamma)
+    mFinishedAnimation = std::abs(mCurrentGamma - targetGamma) < 0.001f;
+    if (mFinishedAnimation && !mEnabled) return;
+
+    float delta = ImGui::GetIO().DeltaTime;
+
+    mCurrentGamma = std::lerp(mCurrentGamma, targetGamma, speed * delta);
+    auto ci = ClientInstance::get();
+    auto options = ci->getOptions();
+    options->mGfxGamma->mValue = mCurrentGamma;
+
 }

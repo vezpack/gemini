@@ -1,182 +1,243 @@
 //
-// Created by Flash on 1/3/2024.
+// Created by vastrakai on 8/10/2024.
 //
 
-#include "Nametags.h"
+#include "Nametags.hpp"
 
-#include <mutex>
-#include <Prax/Module/ModuleManager.h>
+#include <Features/Events/NametagRenderEvent.hpp>
 
+#include <Features/IRC/IrcClient.hpp>
+#include <Features/Modules/Misc/Friends.hpp>
+#include <SDK/Minecraft/ClientInstance.hpp>
+#include <SDK/Minecraft/MinecraftSim.hpp>
+#include <SDK/Minecraft/Options.hpp>
+#include <SDK/Minecraft/Actor/Actor.hpp>
+#include <SDK/Minecraft/Actor/Components/FlagComponent.hpp>
+#include <SDK/Minecraft/Rendering/GuiData.hpp>
 
-#include <Prax/Module/Modules/Combat/Antibot.h>
-#include <Prax/Module/Modules/Player/Friends.h>
-#include <Prax/Utils/Math.h>
-#include <Prax/Utils/Render/ColorUtil.h>
-#include <Prax/Utils/Render/Render.h>
-#include <Prax/Utils/String.h>
-#include <Prax/SDK/Game/Render/LevelRenderer.h>
-
-#include "ShowNametag.h"
-
-
-Actor* getActorFromPlayerlist(std::string name) {
-    auto player = Minecraft::ClientInstance->ThePlayer();
-    if (!player) return nullptr;
-
-    // use getRuntimeActorList for entitylist
-    for (auto& actor : player->level->getRuntimeActorList()) {
-        if (String::ContainsIgnoreCase(actor->_getNameTag(), name)) {
-            return actor;
-        }
-    }
-
-    return nullptr;
-}
-
-
-std::unordered_map<Actor*, std::string> Nametags::CachedXuids = std::unordered_map<Actor*, std::string>();
-void Nametags::OnRender()
+void Nametags::onEnable()
 {
-    auto player = Minecraft::ClientInstance->ThePlayer();
-
-    if (!player) {
-        return;
-    }
-    ImGui::PushFont(Font::Fonts["greycliff_demibold_large"]);
-
-    std::vector<Actor*> actors = Antibot::GetActors(ShowTeamMembers.Enabled);
-
-    static ShowNametag* showNametag = ModuleManager::GetModule<ShowNametag>();
-
-    for (auto actor : actors) {
-        Vector3* dpos = actor->GetRenderPositionComponent();
-        if (!dpos) continue;
-        Vector3 pos = *dpos;
-        AABB aabb = actor->GetLerpedAABB();
-        if (actor == player)
-        {
-            // Check if we are in first person
-            if (Minecraft::ClientInstance->GetOptions()->game_thirdperson->value == 0) continue;
-            // If ShowNametags module is disabled, continue
-            if (!showNametag->Enabled) continue;
-            pos = Render::Transform.playerPos;
-            aabb = player->GetAABBForPos(pos);
-        }
-        auto color = ImColor(255, 255, 255, 255);
-
-        if (ShowFriends.Enabled && Friends::IsFriend(actor)) color = ImColor(0, 255, 0, 255);
-        else if (!ShowFriends.Enabled && Friends::IsFriend(actor)) continue;
-
-
-        ImVec4 pos2d = Math::Get2dDrawPoints(aabb.lower, aabb.upper);
-
-        if (pos2d.x <= 0 && pos2d.y <= 0 && pos2d.z <= 0 && pos2d.w <= 0)
-            continue;
-
-        std::string name = actor->_getNameTag();
-
-        if (name.empty())
-            continue;
-
-        // if the name contains a newline, remove it and everything after it
-        if (name.find('\n') != std::string::npos)
-            name = name.substr(0, name.find('\n'));
-
-        // make sure the player is on the screen
-        if (pos2d.x < 0 || pos2d.y < 0) continue;
-
-        Vector3 cameraPos = Minecraft::ClientInstance->levelRenderer->levelRendererPlayer->cameraPos;
-
-        float fontSize = Size.Value;
-
-        if (Scaling.Enabled)
-        {
-            // scale the size down based how large the distance is from the camera
-            float distance = cameraPos.Distance(*pos);
-            float scale = abs((distance / 2.5f) + 1.f);
-            fontSize /= scale;
-
-            // make sure the font size is not smaller than the minimum
-            if (fontSize < MinimumScale.Value)
-                fontSize = MinimumScale.Value;
-        }
-
-        // remove any non ascii characters
-
-        // Replace § with &
-        ImVec2 textSize = ImGui::GetFont()->CalcTextSizeA(fontSize, FLT_MAX, 0, String::RemoveColorCodes(name).c_str());
-
-        // Get the position of the text thats centered above the 2d startpos
-        ImVec2 textPos = ImVec2(pos2d.x + (pos2d.z - pos2d.x) / 2 - textSize.x / 2, pos2d.y - textSize.y - 5);
-
-        // Get the position of the background
-        ImVec2 bgPos = ImVec2(textPos.x - 5, textPos.y - 5);
-        ImVec2 bgEndPos = ImVec2(bgPos.x + textSize.x + 10, bgPos.y + textSize.y + 10);
-
-        // Render outline of the background using bg draw list
-
-
-        // Render the background using bg draw list
-        Render::DrawList->AddRectFilled(bgPos, bgEndPos, ImColor(0, 0, 0, 100), 5.f);
-
-        // Render the text using fg draw list
-        auto info = Render::RenderTextColored(name, textPos, fontSize, color, false);
-
-        //Render::DrawList->AddRect(bgPos, bgEndPos, info.Color, 5.f);
-
-
-    }
-
-    ImGui::PopFont();
+    gFeatureManager->mDispatcher->listen<RenderEvent, &Nametags::onRenderEvent>(this);
+    gFeatureManager->mDispatcher->listen<BaseTickEvent, &Nametags::onBaseTickEvent>(this);
+    gFeatureManager->mDispatcher->listen<NametagRenderEvent, &Nametags::onNametagRenderEvent>(this);
 }
-
-bool _bytePatch = false;
-
-
-void Nametags::OnTick()
+void Nametags::onDisable()
 {
-    auto player = Minecraft::ClientInstance->ThePlayer();
+    gFeatureManager->mDispatcher->deafen<RenderEvent, &Nametags::onRenderEvent>(this);
+    gFeatureManager->mDispatcher->deafen<BaseTickEvent, &Nametags::onBaseTickEvent>(this);
+    gFeatureManager->mDispatcher->deafen<NametagRenderEvent, &Nametags::onNametagRenderEvent>(this);
 
+    auto player = ClientInstance::get()->getLocalPlayer();
     if (!player) return;
+}
 
-    static uintptr_t addr = SigManager::GetSignatureAddress(SignatureEnum::Actor_shouldRenderNametagBp);
-    if (HideMinecraftNametags.Enabled) {
-        std::vector<char> bytes = {(char)0x90, (char)0xE9};
-        Memory::WriteBytes(addr, bytes.data(), bytes.size());
-        _bytePatch = true;
-    } else {
-        std::vector<char> bytes = {(char)0x0F, (char)0x84};
-        Memory::WriteBytes(addr, bytes.data(), bytes.size());
-        _bytePatch = false;
+std::mutex bpsMutex;
+std::unordered_map<Actor*, float> bpsMap;
+std::unordered_map<Actor*, std::map<int64_t, float>> bpsHistory;
+std::unordered_map<Actor*, float> avgBpsMap;
+
+void Nametags::onBaseTickEvent(BaseTickEvent& event)
+{
+    std::lock_guard<std::mutex> lock(bpsMutex);
+
+    auto actors = ActorUtils::getActorList(true, true);
+    auto localPlayer = ClientInstance::get()->getLocalPlayer();
+    for (auto actor : actors)
+    {
+        if (!actor->isPlayer()) continue;
+        if (actor == localPlayer && !mRenderLocal.mValue) continue;
+        auto shape = actor->getAABBShapeComponent();
+        if (!shape) continue;
+        auto posComp = actor->getRenderPositionComponent();
+        if (!posComp) continue;
+
+        static std::map<Actor*, glm::vec3> prevPosMap;
+        glm::vec3 p = *actor->getPos();
+        glm::vec3 prevPos = prevPosMap.contains(actor) ? prevPosMap[actor] : p;
+        prevPosMap[actor] = p;
+
+        glm::vec2 posxz = { p.x, p.z };
+        glm::vec2 prevPosxz = { prevPos.x, prevPos.z };
+        float bps = glm::distance(posxz, prevPosxz) * (ClientInstance::get()->getMinecraftSim()->getSimTimer() * ClientInstance::get()->getMinecraftSim()->getSimSpeed());
+        if (!bpsHistory.contains(actor)) bpsHistory[actor] = {};
+
+        std::map<int64_t, float>& history = bpsHistory[actor];
+        history[NOW] = bps;
+        for (auto it = history.begin(); it != history.end();)
+        {
+            if (NOW - it->first > 1000) it = history.erase(it);
+            else ++it;
+        }
+
+        float total = 0.f;
+        int count = 0;
+        for (auto it = history.begin(); it != history.end(); ++it)
+        {
+            total += it->second;
+            count++;
+        }
+        avgBpsMap[actor] = count > 0 ? (total / count) : 0.f;
+        bpsMap[actor] = bps;
     }
 }
 
+float getActorBps(bool avg, Actor* actor) {
+    std::lock_guard<std::mutex> lock(bpsMutex);
 
-void Nametags::OnEject()
-{
-    if (!_bytePatch) return;
-    static uintptr_t addr = SigManager::GetSignatureAddress(SignatureEnum::Actor_shouldRenderNametagBp);
-    std::vector<char> bytes = {(char)0x0F, (char)0x84};
-    Memory::WriteBytes(addr, bytes.data(), bytes.size());
+    if (avg) return avgBpsMap.contains(actor) ? avgBpsMap[actor] : 0;
+    return bpsMap.contains(actor) ? bpsMap[actor] : 0;
 }
 
-void Nametags::OnEnable()
+void Nametags::onRenderEvent(RenderEvent& event)
 {
-    if (!HideMinecraftNametags.Enabled) return;
+    auto ci = ClientInstance::get();
+    if (!ci->getLevelRenderer()) return;
+    if (mStyle.mValue != Style::Swiss) return;
 
-    static uintptr_t addr = SigManager::GetSignatureAddress(SignatureEnum::Actor_shouldRenderNametagBp);
-    std::vector<char> bytes = {(char)0x90, (char)0xE9};
-    Memory::WriteBytes(addr, bytes.data(), bytes.size());
+    auto actors = ActorUtils::getActorList(true, true);
+    std::ranges::sort(actors, [&](Actor* a, Actor* b) {
+        auto aPosComp = a->getRenderPositionComponent();
+        auto bPosComp = b->getRenderPositionComponent();
+        if (!aPosComp || !bPosComp) return false;
+        auto aPos = aPosComp->mPosition;
+        auto bPos = bPosComp->mPosition;
+        auto origin = RenderUtils::transform.mOrigin;
+        return glm::distance(origin, aPos) > glm::distance(origin, bPos);
+        });
 
-    _bytePatch = true;
+    auto drawList = ImGui::GetBackgroundDrawList();
+    auto localPlayer = ci->getLocalPlayer();
+
+    for (auto actor : actors)
+    {
+        if (!actor->isPlayer()) continue;
+        if (actor == localPlayer && ci->getOptions()->mThirdPerson->mValue == 0) continue;
+        if (actor == localPlayer && !mRenderLocal.mValue) continue;
+        auto shape = actor->getAABBShapeComponent();
+        if (!shape) continue;
+        auto posComp = actor->getRenderPositionComponent();
+        if (!posComp) continue;
+
+        float bps = getActorBps(false, actor);
+        std::string formattedBps = fmt::format("{:.2f}", bps);
+        float avgBps = getActorBps(true, actor);
+        std::string formattedAvgBps = fmt::format("{:.2f}", avgBps);
+
+        auto themeColor = ImColor(1.f, 1.f, 1.f, 1.f);
+
+        if (gFriendManager->isFriend(actor))
+        {
+            if (mShowFriends.mValue) themeColor = ImColor(0.0f, 1.0f, 0.0f);
+            else continue;
+        }
+
+        glm::vec3 renderPos = posComp->mPosition;
+        if (actor == localPlayer) renderPos = RenderUtils::transform.mPlayerPos;
+        renderPos.y += 0.5f;
+
+        glm::vec3 origin = RenderUtils::transform.mOrigin;
+        glm::vec2 screen = glm::vec2(0, 0);
+
+        if (!RenderUtils::transform.mMatrix.OWorldToScreen(origin, renderPos, screen, ci->getFov(), ci->getGuiData()->mResolution)) continue;
+        if (std::isnan(screen.x) || std::isnan(screen.y)) continue;
+        if (screen.x < 0 || screen.y < 0 || screen.x > ci->getGuiData()->mResolution.x * 2 || screen.y > ci->getGuiData()->mResolution.y * 2) continue;
+
+        float fontSize = mFontSize.mValue;
+        float padding = 6.f;
+
+        if (mDistanceScaledFont.mValue)
+        {
+            float distance = glm::distance(origin, renderPos) + 2.5f;
+            if (distance < 0) distance = 0;
+            fontSize = 1.0f / distance * 100.0f * mScalingMultiplier.mValue;
+            if (fontSize < 1.0f) fontSize = 1.0f;
+            if (fontSize < mMinScale.mValue) fontSize = mMinScale.mValue;
+            padding = fontSize / 4;
+        }
+
+        FontHelper::pushPrefFont(true);
+
+        std::string name = actor->getRawName();
+
+        if (actor == localPlayer)
+        {
+            name = actor->getNameTag();
+            name = name.substr(0, name.find('\n'));
+            name = ColorUtils::removeColorCodes(name);
+        }
+
+        if (mShowIrcUsers.mValue && IrcManager::mClient) {
+            auto ircUsers = IrcManager::mClient->getConnectedUsers();
+            for (const auto& user : ircUsers) {
+                if (name.contains(user.playerName)) {
+                    name = user.username + " (" + user.playerName + ")";
+                    break;
+                }
+            }
+        }
+
+        if (mShowBps.mValue)
+        {
+            if (mAverageBps.mValue)
+            {
+                name += " [" + formattedAvgBps + "]";
+            }
+            else
+            {
+                name += " [" + formattedBps + "]";
+            }
+        }
+
+        ImVec2 imFontSize = ImGui::GetFont()->CalcTextSizeA(fontSize, FLT_MAX, 0, name.c_str());
+        ImVec2 pos = ImVec2(screen.x - imFontSize.x / 2, screen.y - imFontSize.y - 5);
+
+        ImVec2 rectMin = ImVec2(pos.x - padding, pos.y - padding);
+        ImVec2 rectMax = ImVec2(pos.x + imFontSize.x + padding, pos.y + imFontSize.y + padding);
+
+        float rounding = mRounding.mValue;
+
+        // Swiss Minimalist Backdrop Rendering
+        if (mBlurStrength.mValue > 0.0f) {
+            ImRenderUtils::addBlur(ImVec4(rectMin.x, rectMin.y, rectMax.x, rectMax.y), mBlurStrength.mValue, rounding, drawList, true);
+        }
+
+        drawList->AddRectFilled(rectMin, rectMax, ImColor(15, 15, 15, static_cast<int>(255 * mBackgroundAlpha.mValue)), rounding);
+
+        if (mShowBorder.mValue) {
+            drawList->AddRect(rectMin, rectMax, ImColor(255, 255, 255, 35), rounding, 0, 1.0f);
+        }
+
+        drawList->AddText(ImGui::GetFont(), fontSize, pos, themeColor, name.c_str());
+
+        FontHelper::popPrefFont();
+    }
 }
 
-void Nametags::OnDisable()
+void Nametags::onNametagRenderEvent(NametagRenderEvent& event)
 {
-    if (!_bytePatch) return;
-    static uintptr_t addr = SigManager::GetSignatureAddress(SignatureEnum::Actor_shouldRenderNametagBp);
-    std::vector<char> bytes = {(char)0x0F, (char)0x84};
-    Memory::WriteBytes(addr, bytes.data(), bytes.size());
+    auto actor = event.mActor;
+    auto localPlayer = ClientInstance::get()->getLocalPlayer();
+    auto ci = ClientInstance::get();
 
+    if (ActorUtils::isBot(actor)) return;
+    if (!actor->isPlayer()) return;
+    if (actor == localPlayer && ci->getOptions()->mThirdPerson->mValue == 0) return;
+    if (actor == localPlayer && !mRenderLocal.mValue) return;
+    auto shape = actor->getAABBShapeComponent();
+    if (!shape) return;
+    auto posComp = actor->getRenderPositionComponent();
+    if (!posComp) return;
 
+    glm::vec3 renderPos = posComp->mPosition;
+    if (actor == localPlayer) renderPos = RenderUtils::transform.mPlayerPos;
+    renderPos.y += 0.5f;
+
+    glm::vec3 origin = RenderUtils::transform.mOrigin;
+    glm::vec2 screen = glm::vec2(0, 0);
+
+    if (!RenderUtils::transform.mMatrix.OWorldToScreen(origin, renderPos, screen, ci->getFov(), ci->getGuiData()->mResolution)) return;
+    if (std::isnan(screen.x) || std::isnan(screen.y)) return;
+    if (screen.x < 0 || screen.y < 0 || screen.x > ci->getGuiData()->mResolution.x * 2 || screen.y > ci->getGuiData()->mResolution.y * 2) return;
+
+    event.cancel();
 }
